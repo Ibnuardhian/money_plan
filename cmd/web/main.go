@@ -9,10 +9,11 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
 
-	"your_project_name/config"
-	myHttp "your_project_name/internal/delivery/http"
-	"your_project_name/internal/repository"
-	"your_project_name/internal/usecase"
+	"money_plan/config"
+	myHttp "money_plan/internal/delivery/http"
+	route "money_plan/internal/delivery/http/route"
+	"money_plan/internal/repository"
+	"money_plan/internal/usecase"
 )
 
 func main() {
@@ -32,7 +33,7 @@ func main() {
 	app.Use(logger.New())
 	app.Use(cors.New())
 
-	myHttp.SetupRoutes(app, planHandler)
+	route.SetupRoutes(app, planHandler)
 
 	// 4. START
 	port := os.Getenv("PORT")

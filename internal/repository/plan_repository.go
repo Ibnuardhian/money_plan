@@ -2,37 +2,35 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"money_plan/internal/model"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 )
 
 type PlanRepository interface {
 	Save(ctx context.Context, plan *model.FinancialPlan) error
-	// Method lain seperti FindByID, Update, dll.
+	FindByID(ctx context.Context, id uint) (*model.FinancialPlan, error)
 }
 
 type planRepository struct {
-	pool *pgxpool.Pool
+	db *gorm.DB
 }
 
-func NewPlanRepository(pool *pgxpool.Pool) PlanRepository {
-	return &planRepository{pool: pool}
+func NewPlanRepository(db *gorm.DB) PlanRepository {
+	return &planRepository{db}
 }
 
+// Save menyimpan plan baru ke Postgres
 func (r *planRepository) Save(ctx context.Context, plan *model.FinancialPlan) error {
-	// Simpan seluruh dokumen sebagai JSONB agar logic tetap sama
-	payload, err := json.Marshal(plan)
-	if err != nil {
-		return err
-	}
+	// GORM support context untuk timeout cancellation
+	// .Create() otomatis generate SQL INSERT
+	result := r.db.WithContext(ctx).Create(plan)
+	return result.Error
+}
 
-	// Tabel: plans(id, user_id, name, created_at, data)
-	const q = `
-		INSERT INTO plans (id, user_id, name, created_at, data)
-		VALUES ($1, $2, $3, $4, $5)
-	`
-	_, err = r.pool.Exec(ctx, q, plan.ID, plan.UserID, plan.Name, plan.CreatedAt, payload)
-	return err
+// Contoh fungsi Find (Opsional)
+func (r *planRepository) FindByID(ctx context.Context, id uint) (*model.FinancialPlan, error) {
+	var plan model.FinancialPlan
+	// GORM otomatis convert kolom JSONB kembali ke struct Go
+	err := r.db.WithContext(ctx).First(&plan, id).Error
+	return &plan, err
 }

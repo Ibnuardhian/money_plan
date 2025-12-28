@@ -13,3 +13,10 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Environment
+.env
+.env.*
+*.env
+.envrc
+/env/

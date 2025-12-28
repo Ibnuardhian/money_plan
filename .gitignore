@@ -1,0 +1,15 @@
+# Binaries
+/dist/
+/build/
+*.exe
+*.dll
+*.test
+*.out
+
+# Go modules cache (not in repo)
+/vendor/
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,156 @@
+Money Plan - CRUD SPEC (singkat)
+================================
+Base URL: http://localhost:3000/api/v1
+
+1) Users
+---------
+Tabel DB: users (id, name, email, password, created_at, updated_at)
+
+Endpoints:
+- POST /users
+  - Desc: Buat user baru (register).
+  - Request JSON:
+    {
+      "name": "John Doe",
+      "email": "john@example.com",
+      "password": "secret"
+    }
+  - Response 201:
+    {
+      "id": 1,
+      "name": "John Doe",
+      "email": "john@example.com",
+      "created_at": "2025-01-01T00:00:00Z"
+    }
+
+- GET /users
+  - Desc: List semua user (admin).
+  - Response 200: [ {user}, ... ]
+
+- GET /users/{id}
+  - Desc: Detail user.
+  - Response 200: {user}
+
+- PUT /users/{id}
+  - Desc: Update user.
+  - Request JSON (partial):
+    { "name": "New Name" }
+  - Response 200: {updated user}
+
+- DELETE /users/{id}
+  - Desc: Hapus user.
+
+Curl contoh (create):
+curl -X POST http://localhost:3000/api/v1/users -H "Content-Type: application/json" -d '{"name":"John","email":"john@example.com","password":"pw"}'
+
+2) Expenses (master data)
+--------------------------
+Tabel DB: expenses (id, user_id, name, type, default_amount, default_rate, created_at, updated_at)
+
+Endpoints:
+- POST /expenses
+  - Create expense item (user-specific)
+  - Request:
+    {
+      "user_id": 1,
+      "name": "Rent",
+      "type": "FIXED",
+      "default_amount": 800
+    }
+- GET /expenses?user_id={id}
+  - List expenses for user
+- GET /expenses/{id}
+- PUT /expenses/{id}
+- DELETE /expenses/{id}
+
+3) Financial Plans (core)
+--------------------------
+Tabel DB:
+- financial_plans (id, user_id, name, start_date, initial_capital, target_savings, income_streams (JSON), expense_rules (JSON), created_at, updated_at)
+- plan_monthly_projections (id, plan_id, month_index, period_date, main_income, income_note, total_expense, disposable_income, savings_balance)
+- plan_expense_details (id, monthly_projection_id, name, amount, category_type, percentage_rate, note)
+
+Primary endpoints:
+- POST /plans/calculate
+  - Desc: Hitung proyeksi berdasarkan ProjectionRequest, simpan plan + monthly projections + expense details.
+  - Request (ProjectionRequest example):
+    {
+      "start_date": "2025-01-01",
+      "initial_capital": 5000,
+      "target_savings": 20000,
+      "income_streams": [
+        {"start_month":1,"end_month":24,"amount":3000,"note":"Salary"}
+      ],
+      "expense_rules": [
+        {"name":"Rent","type":"FIXED","amount":800,"rate":0,"initial_balance":0,"start_month":1,"end_month":0,"note":"Monthly rent"},
+        {"name":"Car Loan","type":"LOAN_INTEREST","amount":400,"rate":5,"initial_balance":8000,"start_month":1,"end_month":24,"note":"Car"},
+        {"name":"Food","type":"PERCENTAGE_OF_GROSS","amount":0,"rate":10,"initial_balance":0,"start_month":1,"end_month":0,"note":"10%"}
+      ]
+    }
+  - Response 201:
+    {
+      "message":"Projection created successfully",
+      "data": { ... FinancialPlan with monthly_projections and expense_details ... }
+    }
+  - DB side: financial_plans row + N monthly_projection rows + M plan_expense_detail rows
+
+- GET /plans?user_id={id}
+  - Desc: List plans (compact fields)
+  - Response: [ {id, user_id, name, start_date, target_savings, created_at}, ... ]
+
+- GET /plans/{id}
+  - Desc: Detail plan with monthly_projections and expense_details (eager load)
+  - Response: FinancialPlan JSON including monthly_projections -> expense_details
+
+- DELETE /plans/{id}
+  - Desc: Hapus plan; cascade hapus monthly_projections dan plan_expense_details
+
+- (Optional) PUT /plans/{id}
+  - Desc: Update metadata (name, target_savings). Kalkulasi ulang via POST /plans/calculate jika diperlukan.
+
+Curl contoh (calculate):
+curl -X POST http://localhost:3000/api/v1/plans/calculate -H "Content-Type: application/json" -d @payload.json
+
+4) Monthly Projections / Expense Details (read-only via Plan)
+-------------------------------------------------------------
+Biasanya tidak punya CRUD terpisah: diciptakan oleh proses kalkulasi plan.
+Jika diperlukan, endpoints admin bisa ditambahkan:
+- GET /monthly-projections?plan_id={id}
+- GET /monthly-projections/{id}
+- PUT/DELETE only for admin (use with caution)
+
+5) Response & Error Conventions
+-------------------------------
+- 200 OK: sukses untuk GET/PUT
+- 201 Created: resource created (POST /plans/calculate returns 201)
+- 400 Bad Request: invalid input
+- 404 Not Found: resource tidak ada
+- 500 Internal Error: error server / DB
+
+6) Notes teknis & mapping
+-------------------------
+- Usecase: GenerateAndSaveProjection membuat FinancialPlan + MonthlyProjection + PlanExpenseDetail dan memanggil repository.Save (GORM Create with associations).
+- GORM tags sudah ada di model/*.go; AutoMigrate harus membuat semua tabel (lihat db/migration).
+- Untuk authentication: saat ini UserID hardcoded di usecase (1). Ganti dengan user extraction dari context ketika auth ditambahkan.
+
+7) Contoh payload file (payload.json)
+-------------------------------------
+{
+  "start_date": "2025-01-01",
+  "initial_capital": 5000,
+  "target_savings": 20000,
+  "income_streams": [
+    {"start_month":1,"end_month":24,"amount":3000,"note":"Salary"}
+  ],
+  "expense_rules":[
+    {"name":"Rent","type":"FIXED","amount":800,"rate":0,"initial_balance":0,"start_month":1,"end_month":0,"note":"Monthly rent"},
+    {"name":"Food","type":"PERCENTAGE_OF_GROSS","amount":0,"rate":10,"initial_balance":0,"start_month":1,"end_month":0,"note":"10% of gross"}
+  ]
+}
+
+8) Quick checklist setelah migrasi:
+- Pastikan env DB_* terisi dan app berhasil connect.
+- Jalankan POST /plans/calculate dengan payload.json.
+- Cek tabel financial_plans, plan_monthly_projections, plan_expense_details via DB client.
+
+End of CRUD_SPEC.

@@ -2,13 +2,16 @@ package repository
 
 import (
 	"context"
-	"money_plan/internal/model"
+	"money_plan/internal/model" // Sesuaikan module path
+
 	"gorm.io/gorm"
 )
 
 type PlanRepository interface {
 	Save(ctx context.Context, plan *model.FinancialPlan) error
+	FindAll(ctx context.Context, userID uint) ([]model.FinancialPlan, error)
 	FindByID(ctx context.Context, id uint) (*model.FinancialPlan, error)
+	Delete(ctx context.Context, id uint) error
 }
 
 type planRepository struct {
@@ -19,18 +22,34 @@ func NewPlanRepository(db *gorm.DB) PlanRepository {
 	return &planRepository{db}
 }
 
-// Save menyimpan plan baru ke Postgres
 func (r *planRepository) Save(ctx context.Context, plan *model.FinancialPlan) error {
-	// GORM support context untuk timeout cancellation
-	// .Create() otomatis generate SQL INSERT
-	result := r.db.WithContext(ctx).Create(plan)
-	return result.Error
+	// GORM otomatis insert ke tabel anak (MonthlyProjections & ExpenseDetails)
+	// jika struct-nya terisi dengan benar.
+	return r.db.WithContext(ctx).Create(plan).Error
 }
 
-// Contoh fungsi Find (Opsional)
+func (r *planRepository) FindAll(ctx context.Context, userID uint) ([]model.FinancialPlan, error) {
+	var plans []model.FinancialPlan
+	// Kita tidak load MonthlyProjections (Preload) disini agar ringan (Compact View)
+	err := r.db.WithContext(ctx).
+		Select("id, user_id, name, start_date, target_savings, created_at").
+		Where("user_id = ?", userID).
+		Order("created_at desc").
+		Find(&plans).Error
+	return plans, err
+}
+
 func (r *planRepository) FindByID(ctx context.Context, id uint) (*model.FinancialPlan, error) {
 	var plan model.FinancialPlan
-	// GORM otomatis convert kolom JSONB kembali ke struct Go
-	err := r.db.WithContext(ctx).First(&plan, id).Error
+	// EAGER LOADING: Load Plan -> Load Bulan -> Load Detail Expense
+	err := r.db.WithContext(ctx).
+		Preload("MonthlyProjections.ExpenseDetails").
+		Preload("MonthlyProjections").
+		First(&plan, id).Error
+
 	return &plan, err
+}
+
+func (r *planRepository) Delete(ctx context.Context, id uint) error {
+	return r.db.WithContext(ctx).Delete(&model.FinancialPlan{}, id).Error
 }

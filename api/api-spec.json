@@ -1,0 +1,292 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Money Plan API",
+    "version": "1.0.0",
+    "description": "API untuk menghitung dan menyimpan proyeksi keuangan (plans)."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local development"
+    }
+  ],
+  "paths": {
+    "/api/v1/plans/calculate": {
+      "post": {
+        "summary": "Generate and save financial projection",
+        "description": "Menerima konfigurasi income & expense rules, menghasilkan proyeksi bulanan dan menyimpannya ke DB.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectionRequest"
+              },
+              "example": {
+                "start_date": "2025-01-01",
+                "initial_capital": 5000,
+                "target_savings": 20000,
+                "income_streams": [
+                  {
+                    "start_month": 1,
+                    "end_month": 24,
+                    "amount": 3000,
+                    "note": "Salary"
+                  }
+                ],
+                "expense_rules": [
+                  {
+                    "name": "Rent",
+                    "type": "FIXED",
+                    "amount": 800,
+                    "rate": 0,
+                    "initial_balance": 0,
+                    "start_month": 1,
+                    "end_month": 0,
+                    "note": "Monthly rent"
+                  },
+                  {
+                    "name": "Car Loan",
+                    "type": "LOAN_INTEREST",
+                    "amount": 400,
+                    "rate": 5,
+                    "initial_balance": 8000,
+                    "start_month": 1,
+                    "end_month": 24,
+                    "note": "Car installment"
+                  },
+                  {
+                    "name": "Food",
+                    "type": "PERCENTAGE_OF_GROSS",
+                    "amount": 0,
+                    "rate": 10,
+                    "initial_balance": 0,
+                    "start_month": 1,
+                    "end_month": 0,
+                    "note": "10% of gross income"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Projection created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedResponse"
+                },
+                "example": {
+                  "message": "Projection created successfully",
+                  "data": {
+                    "id": 1,
+                    "user_id": 1,
+                    "name": "Plan 2025-01-01",
+                    "start_date": "2025-01-01",
+                    "initial_capital": 5000,
+                    "target_savings": 20000,
+                    "income_streams": [
+                      {
+                        "start_month": 1,
+                        "end_month": 24,
+                        "amount": 3000,
+                        "note": "Salary"
+                      }
+                    ],
+                    "expense_rules": [
+                      {
+                        "name": "Rent",
+                        "type": "FIXED",
+                        "amount": 800,
+                        "rate": 0,
+                        "initial_balance": 0,
+                        "start_month": 1,
+                        "end_month": 0,
+                        "note": "Monthly rent"
+                      }
+                    ],
+                    "monthly_projections": [
+                      {
+                        "id": 1,
+                        "plan_id": 1,
+                        "month_index": 0,
+                        "period_date": "2025-01-01T00:00:00Z",
+                        "main_income": 3000,
+                        "income_note": "Salary",
+                        "total_expense": 1200,
+                        "disposable_income": 1800,
+                        "savings_balance": 6800,
+                        "expense_details": [
+                          {
+                            "id": 1,
+                            "monthly_projection_id": 1,
+                            "name": "Rent",
+                            "amount": 800,
+                            "category_type": "FIXED",
+                            "percentage_rate": 0,
+                            "note": "Monthly rent"
+                          }
+                        ]
+                      }
+                    ],
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "updated_at": null
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error while generating or saving projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ProjectionRequest": {
+        "type": "object",
+        "required": ["start_date", "initial_capital", "income_streams", "expense_rules"],
+        "properties": {
+          "start_date": {
+            "type": "string",
+            "format": "date",
+            "example": "2025-01-01"
+          },
+          "initial_capital": {
+            "type": "number",
+            "example": 5000
+          },
+          "target_savings": {
+            "type": "number",
+            "example": 20000
+          },
+          "income_streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncomeStream"
+            }
+          },
+          "expense_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExpenseRule"
+            }
+          }
+        }
+      },
+      "IncomeStream": {
+        "type": "object",
+        "properties": {
+          "start_month": { "type": "integer", "example": 1 },
+          "end_month": { "type": "integer", "example": 24 },
+          "amount": { "type": "number", "example": 3000 },
+          "note": { "type": "string", "example": "Salary" }
+        }
+      },
+      "ExpenseRule": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "example": "Rent" },
+          "type": { "type": "string", "example": "FIXED" },
+          "amount": { "type": "number", "example": 800 },
+          "rate": { "type": "number", "example": 10 },
+          "initial_balance": { "type": "number", "example": 0 },
+          "start_month": { "type": "integer", "example": 1 },
+          "end_month": { "type": "integer", "example": 0 },
+          "note": { "type": "string", "example": "Monthly rent" }
+        }
+      },
+      "PlanExpenseDetail": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "monthly_projection_id": { "type": "integer" },
+          "name": { "type": "string" },
+          "amount": { "type": "number" },
+          "category_type": { "type": "string" },
+          "percentage_rate": { "type": "number" },
+          "note": { "type": "string" }
+        }
+      },
+      "MonthlyProjection": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "plan_id": { "type": "integer" },
+          "month_index": { "type": "integer" },
+          "period_date": { "type": "string", "format": "date-time" },
+          "main_income": { "type": "number" },
+          "income_note": { "type": "string" },
+          "total_expense": { "type": "number" },
+          "disposable_income": { "type": "number" },
+          "savings_balance": { "type": "number" },
+          "expense_details": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PlanExpenseDetail" }
+          }
+        }
+      },
+      "FinancialPlan": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "user_id": { "type": "integer" },
+          "name": { "type": "string" },
+          "start_date": { "type": "string" },
+          "initial_capital": { "type": "number" },
+          "target_savings": { "type": "number" },
+          "income_streams": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/IncomeStream" }
+          },
+          "expense_rules": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ExpenseRule" }
+          },
+          "monthly_projections": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/MonthlyProjection" }
+          },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
+      "CreatedResponse": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "data": { "$ref": "#/components/schemas/FinancialPlan" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "error": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -6,12 +6,15 @@ import (
 	"math"
 	"time"
 
-	"money_plan/internal/model"      // GANTI: Sesuaikan dengan module name di go.mod
-	"money_plan/internal/repository" // GANTI: Sesuaikan dengan module name di go.mod
+	"money_plan/internal/model" // Sesuaikan module path
+	"money_plan/internal/repository"
 )
 
 type PlanUsecase interface {
 	GenerateAndSaveProjection(ctx context.Context, req model.ProjectionRequest) (*model.FinancialPlan, error)
+	GetUserPlans(ctx context.Context, userID uint) ([]model.FinancialPlan, error)
+	GetPlanDetail(ctx context.Context, planID uint) (*model.FinancialPlan, error)
+	DeletePlan(ctx context.Context, planID uint) error
 }
 
 type planUsecase struct {
@@ -26,50 +29,62 @@ func NewPlanUsecase(repo repository.PlanRepository) PlanUsecase {
 	}
 }
 
-// =================================================================================
-// CORE LOGIC: CALCULATION ENGINE
-// =================================================================================
+func (u *planUsecase) GetUserPlans(ctx context.Context, userID uint) ([]model.FinancialPlan, error) {
+	c, cancel := context.WithTimeout(ctx, u.contextTimeout)
+	defer cancel()
+	return u.planRepo.FindAll(c, userID)
+}
 
+func (u *planUsecase) GetPlanDetail(ctx context.Context, planID uint) (*model.FinancialPlan, error) {
+	c, cancel := context.WithTimeout(ctx, u.contextTimeout)
+	defer cancel()
+	return u.planRepo.FindByID(c, planID)
+}
+
+func (u *planUsecase) DeletePlan(ctx context.Context, planID uint) error {
+	c, cancel := context.WithTimeout(ctx, u.contextTimeout)
+	defer cancel()
+	// Optionally check existence first
+	_, err := u.planRepo.FindByID(c, planID)
+	if err != nil {
+		return err
+	}
+	return u.planRepo.Delete(c, planID)
+}
+
+// LOGIC UTAMA
 func (u *planUsecase) GenerateAndSaveProjection(ctx context.Context, req model.ProjectionRequest) (*model.FinancialPlan, error) {
 	c, cancel := context.WithTimeout(ctx, u.contextTimeout)
 	defer cancel()
 
-	// 1. SETUP INITIAL VARIABLES
-	var projections []model.MonthlyProjection
-
-	// Parsing Tanggal Mulai
+	// 1. Setup Initial Variables
 	startDate, err := time.Parse("2006-01-02", req.StartDate)
 	if err != nil {
 		startDate = time.Now()
 	}
-
-	// Saldo Tabungan Berjalan
 	currentSavings := req.InitialCapital
-
-	// Setup Saldo Awal Hutang (Snapshot status hutang saat start)
-	// Key: Nama Rule, Value: Sisa Hutang
 	debtBalances := make(map[string]float64)
+
+	// Setup Saldo Awal Hutang
 	for _, rule := range req.ExpenseRules {
-		// Hanya ambil rule bertipe pinjaman yang punya saldo awal
-		if (rule.Type == "LOAN_FLAT" || rule.Type == "LOAN_INTEREST") && rule.InitialBalance > 0 {
+		if (rule.Type == model.ExpenseTypeLoanFlat || rule.Type == model.ExpenseTypeLoanInterest) && rule.InitialBalance > 0 {
 			debtBalances[rule.Name] = rule.InitialBalance
 		}
 	}
 
-	// Durasi Proyeksi (Default 24 Bulan)
 	monthsToProject := 24
 
-	// 2. MAIN LOOP (ITERASI BULAN DEMI BULAN)
+	// Variable penampung untuk Database Rows
+	var dbMonthlyProjections []model.MonthlyProjection
+
+	// 2. Loop Kalkulasi
 	for i := 0; i < monthsToProject; i++ {
 		currentDate := startDate.AddDate(0, i, 0)
-		monthIndex := i
-		currentMonthNum := i + 1 // 1, 2, 3... (Human friendly index)
+		currentMonthNum := i + 1
 
-		// --- A. HITUNG INCOME (BULK / STREAMS LOGIC) ---
+		// --- A. Hitung Income ---
 		monthlyIncome := 0.0
 		incomeNote := ""
-
-		// Cari income yang range bulannya cocok dengan bulan ini
 		incomeFound := false
 		for _, stream := range req.IncomeStreams {
 			if currentMonthNum >= stream.StartMonth && currentMonthNum <= stream.EndMonth {
@@ -79,46 +94,37 @@ func (u *planUsecase) GenerateAndSaveProjection(ctx context.Context, req model.P
 				break
 			}
 		}
-		// Fallback: Jika tidak ada definisi income di bulan tua (misal bulan 25), pakai income terakhir
 		if !incomeFound && len(req.IncomeStreams) > 0 {
 			lastStream := req.IncomeStreams[len(req.IncomeStreams)-1]
 			monthlyIncome = lastStream.Amount
-			incomeNote = "Extrapolated from last stream"
+			incomeNote = "Extrapolated"
 		}
+		totalIncome := monthlyIncome
 
-		totalIncome := monthlyIncome // + SideIncome (future feature)
+		// --- B. Hitung Expenses (2 Pass) ---
+		var logicExpenses []model.ExpenseItem // Struct sementara
+		totalFixedAndDebt := 0.0
 
-		// --- B. HITUNG EXPENSES (DYNAMIC RULES & TIME FILTER) ---
-		var monthlyExpenses []model.ExpenseItem
-		totalExpenseThisMonth := 0.0
-
+		// Pass 1: Fixed & Loans
 		for _, rule := range req.ExpenseRules {
-			// [LOGIC BARU] Filter Waktu: Skip jika bulan ini diluar range Start-End rule
-			// Jika StartMonth/EndMonth 0, dianggap berlaku selamanya.
 			if rule.StartMonth > 0 && currentMonthNum < rule.StartMonth {
-				continue // Belum mulai
+				continue
 			}
 			if rule.EndMonth > 0 && currentMonthNum > rule.EndMonth {
-				continue // Sudah berakhir
+				continue
+			}
+			if rule.Type == model.ExpenseTypePercentGross || rule.Type == model.ExpenseTypePercentNet {
+				continue
 			}
 
 			expenseAmount := 0.0
-			note := ""
+			note := rule.Note
 			categoryType := rule.Type
 
 			switch rule.Type {
-			case "FIXED":
-				// Pengeluaran Tetap (Makan, Listrik, Kursus)
+			case model.ExpenseTypeFixed:
 				expenseAmount = rule.Amount
-
-			case "PERCENTAGE_OF_INCOME":
-				// Pengeluaran Persentase (Zakat, Pajak, Sedekah)
-				// Rumus: Income * (Rate / 100)
-				expenseAmount = totalIncome * (rule.Rate / 100)
-				note = fmt.Sprintf("Auto: %.1f%% of Income", rule.Rate)
-
-			case "LOAN_FLAT":
-				// Hutang Flat / Bunga 0% (Cicilan Teman, KPR Syariah Fixed)
+			case model.ExpenseTypeLoanFlat:
 				remaining := debtBalances[rule.Name]
 				if remaining > 0 {
 					payment := rule.Amount
@@ -126,107 +132,117 @@ func (u *planUsecase) GenerateAndSaveProjection(ctx context.Context, req model.P
 						payment = remaining
 					}
 					expenseAmount = payment
-
-					// Kurangi Hutang
 					debtBalances[rule.Name] = remaining - payment
-					note = fmt.Sprintf("Remaining: %.0f", debtBalances[rule.Name])
-				} else {
-					expenseAmount = 0
-					note = "Lunas"
+					note = fmt.Sprintf("Sisa hutang: %.0f", debtBalances[rule.Name])
 				}
-
-			case "LOAN_INTEREST":
-				// Hutang Berbunga Menurun (Paylater, CC)
+			case model.ExpenseTypeLoanInterest:
 				remaining := debtBalances[rule.Name]
 				if remaining > 0 {
-					// 1. Hitung Bunga Bulan Ini (Sisa * RatePertahun / 12)
 					interest := remaining * (rule.Rate / 100 / 12)
-
-					// 2. Total Bayar dari User
 					totalPayment := rule.Amount
-
-					// Validasi: Bayar minimal bunga
 					if totalPayment <= interest {
 						totalPayment = interest
-						note = "Warning: Payment covers interest only!"
+						note = "Interest only warning"
 					}
-
 					expenseAmount = totalPayment
-
-					// 3. Kurangi Pokok
 					principalPaid := totalPayment - interest
-
-					// 4. Update Saldo
 					newBalance := remaining - principalPaid
 					if newBalance < 0 {
 						newBalance = 0
 					}
-
 					debtBalances[rule.Name] = newBalance
-
-					note = fmt.Sprintf("Int: %.0f, Principal: %.0f, Rem: %.0f", interest, principalPaid, newBalance)
 					categoryType = "DEBT_REPAYMENT"
-				} else {
-					expenseAmount = 0
-					note = "Lunas"
+					note = fmt.Sprintf("Bunga: %.0f, Pokok: %.0f, Sisa: %.0f", interest, principalPaid, newBalance)
 				}
 			}
 
-			// Masukkan ke List Expense jika > 0
-			// Kita round agar tampilan di JSON bersih (tanpa koma panjang)
-			if expenseAmount > 0 || rule.Type == "FIXED" {
-				monthlyExpenses = append(monthlyExpenses, model.ExpenseItem{
-					Name:           rule.Name,
-					Amount:         math.Round(expenseAmount),
-					CategoryType:   categoryType,
-					PercentageRate: rule.Rate,
-					Note:           note,
+			if expenseAmount > 0 {
+				logicExpenses = append(logicExpenses, model.ExpenseItem{
+					Name: rule.Name, Amount: math.Round(expenseAmount), CategoryType: categoryType, Note: note,
 				})
-				totalExpenseThisMonth += expenseAmount
+				totalFixedAndDebt += expenseAmount
 			}
 		}
 
-		// --- C. KALKULASI SUMMARY BULANAN ---
+		// Pass 2: Percentage
+		totalPercentageExpense := 0.0
+		for _, rule := range req.ExpenseRules {
+			if rule.StartMonth > 0 && currentMonthNum < rule.StartMonth {
+				continue
+			}
+			if rule.EndMonth > 0 && currentMonthNum > rule.EndMonth {
+				continue
+			}
 
+			expenseAmount := 0.0
+			note := rule.Note
+
+			if rule.Type == model.ExpenseTypePercentGross {
+				expenseAmount = totalIncome * (rule.Rate / 100)
+				note = fmt.Sprintf("%.1f%% dari Gross", rule.Rate)
+			} else if rule.Type == model.ExpenseTypePercentNet {
+				netBase := totalIncome - totalFixedAndDebt
+				if netBase > 0 {
+					expenseAmount = netBase * (rule.Rate / 100)
+					note = fmt.Sprintf("%.1f%% dari Netto", rule.Rate)
+				}
+			}
+
+			if expenseAmount > 0 {
+				logicExpenses = append(logicExpenses, model.ExpenseItem{
+					Name: rule.Name, Amount: math.Round(expenseAmount), CategoryType: rule.Type, PercentageRate: rule.Rate, Note: note,
+				})
+				totalPercentageExpense += expenseAmount
+			}
+		}
+
+		// --- C. Summary ---
+		totalExpenseThisMonth := totalFixedAndDebt + totalPercentageExpense
 		disposableIncome := totalIncome - totalExpenseThisMonth
 		currentSavings += disposableIncome
 
-		// SNAPSHOT HUTANG (Deep Copy Map)
-		// Penting: Agar history sisa hutang tercatat per bulan, bukan nilai akhir saja.
-		currentDebtsSnapshot := make(map[string]float64)
-		for k, v := range debtBalances {
-			if v > 100 { // Sembunyikan sisa receh float residue
-				currentDebtsSnapshot[k] = math.Round(v)
-			}
+		// 3. MAPPING KE DB STRUCT (RELATIONAL)
+		// Convert Logic Item ke DB Table Row
+		var dbExpenseRows []model.PlanExpenseDetail
+		for _, lexp := range logicExpenses {
+			dbExpenseRows = append(dbExpenseRows, model.PlanExpenseDetail{
+				Name:           lexp.Name,
+				Amount:         lexp.Amount,
+				CategoryType:   lexp.CategoryType,
+				PercentageRate: lexp.PercentageRate,
+				Note:           lexp.Note,
+			})
 		}
 
-		// Object Proyeksi Bulan Ini
-		proj := model.MonthlyProjection{
+		// Create Monthly Row
+		dbMonthlyProjections = append(dbMonthlyProjections, model.MonthlyProjection{
+			MonthIndex:       i,
 			PeriodDate:       currentDate,
-			MonthIndex:       monthIndex,
 			MainIncome:       math.Round(monthlyIncome),
-			SideIncome:       0,
-			IncomeNote:       incomeNote, // Pastikan field ini ada di struct model
-			Expenses:         monthlyExpenses,
+			IncomeNote:       incomeNote,
 			TotalExpense:     math.Round(totalExpenseThisMonth),
 			DisposableIncome: math.Round(disposableIncome),
 			SavingsBalance:   math.Round(currentSavings),
-			RemainingDebts:   currentDebtsSnapshot,
-		}
-
-		projections = append(projections, proj)
+			ExpenseDetails:   dbExpenseRows, // GORM akan otomatis insert relasi ini
+		})
 	}
 
-	// 3. BUILD & SAVE DOCUMENT
+	// 4. Build Parent Object & Save
 	finalPlan := &model.FinancialPlan{
-		// ID: Tidak perlu diisi, Postgres akan auto-increment (1, 2, 3...)
-		UserID:      1, // Dummy User ID (karena tipe field uint)
-		Name:        "Rencana Keuangan - " + req.StartDate,
-		CreatedAt:   time.Now(),
-		Projections: projections, // Struct ini akan otomatis jadi JSON oleh GORM
+		UserID:         1, // Hardcode/TODO from context
+		Name:           "Plan " + req.StartDate,
+		StartDate:      req.StartDate,
+		InitialCapital: req.InitialCapital,
+		TargetSavings:  req.TargetSavings,
+		IncomeStreams:  req.IncomeStreams, // Simpan Config Input (JSON)
+		ExpenseRules:   req.ExpenseRules,  // Simpan Config Input (JSON)
+
+		// Hasil Kalkulasi (Relational Tables)
+		MonthlyProjections: dbMonthlyProjections,
+
+		CreatedAt: time.Now(),
 	}
 
-	// Simpan ke Database
 	err = u.planRepo.Save(c, finalPlan)
 	if err != nil {
 		return nil, err

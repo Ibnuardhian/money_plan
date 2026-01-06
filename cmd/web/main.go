@@ -28,12 +28,23 @@ func main() {
 	planUsecase := usecase.NewPlanUsecase(planRepo)
 	planHandler := myHttp.NewPlanHandler(planUsecase)
 
+	// User layers
+	userRepo := repository.NewUserRepository(db)
+	userUsecase := usecase.NewUserUsecase(userRepo)
+	userHandler := myHttp.NewUserHandler(userUsecase)
+
+	// Expense layers (NEW)
+	expRepo := repository.NewExpenseRepository(db)
+	expUsecase := usecase.NewExpenseUsecase(expRepo, planRepo)
+	expenseHandler := myHttp.NewExpenseHandler(expUsecase)
+
 	// 3. SERVER
 	app := fiber.New()
 	app.Use(logger.New())
 	app.Use(cors.New())
 
-	route.SetupRoutes(app, planHandler)
+	// Pass handlers (plan, user, expense)
+	route.SetupRoutes(app, planHandler, userHandler, expenseHandler)
 
 	// 4. START
 	port := os.Getenv("PORT")

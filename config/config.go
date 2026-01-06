@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"money_plan/internal/model" // Import model untuk auto-migrate
+	migration "money_plan/db/migration"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -32,13 +32,9 @@ func NewPostgresDatabase() *gorm.DB {
 		log.Fatal("Failed to connect to PostgreSQL:", err)
 	}
 
-	// AUTO MIGRATE: Fitur ajaib GORM untuk membuat tabel otomatis
-	// Pastikan model FinancialPlan didaftarkan disini
-	log.Println("Running Auto Migrate...")
-	err = db.AutoMigrate(&model.FinancialPlan{})
-	if err != nil {
-		log.Fatal("Migration failed:", err)
-	}
+	// Jalankan migration pusat yang mendaftarkan semua model
+	log.Println("Running Auto Migrate (all models)...")
+	migration.RunMigration(db)
 
 	log.Println("✅ Connected to PostgreSQL & Migrated!")
 	return db
